@@ -12,7 +12,12 @@ from transformers import (
     EvalPrediction,
     PreTrainedModel,
     PretrainedConfig,
+    SchedulerType,
     Trainer,
+    TrainerCallback,
+    TrainerState,
+    TrainerControl,
+    TrainingArguments,
 )
 from transformers.trainer_utils import (
     EvalLoopOutput,
@@ -36,6 +41,29 @@ from torch.utils.data import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class FreezingCallback(TrainerCallback):
+    """Freeze the encoder during the first `freeze_ratio * max_steps` period. """
+
+    def __init__(self, trainer: Trainer, freeze_ratio: float, freeze_layer: Union[str, List[str]]="encoder"):
+        self.trainer = trainer
+        self.freeze_ratio = freeze_ratio
+        self.freeze_layer = [freeze_layer] if isinstance(freeze_layer, str) else freeze_layer
+
+    def on_step_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        if state.global_step < int(self.freeze_ratio * state.max_steps):
+            self.freeze_model()
+        elif state.global_step == int(self.freeze_ratio * state.max_steps):
+            for param in self.trainer.model.parameters():
+                param.requires_grad = True
+
+    def freeze_model(self):
+        for name, param in self.trainer.model.named_parameters():
+            if any(name.startswith(prefix) for prefix in self.freeze_layer):
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
 
 
 class MultitaskModel(PreTrainedModel):
@@ -86,7 +114,7 @@ class MultitaskModel(PreTrainedModel):
             return "roberta"
         elif model_class_name.startswith("Albert"):
             return "albert"
-        elif model_class_name.startswith("SiameseBert"):
+        elif "Bert" in model_class_name:
             return "bert"
         else:
             raise KeyError(f"Add support for new model {model_class_name}")
@@ -197,7 +225,7 @@ class MultitaskTrainer(Trainer):
               dataset,
               batch_size=self.args.train_batch_size,
               sampler=sampler,
-            #   collate_fn=self.data_collator.collate_batch,
+              collate_fn=self.data_collator,
             ),
         )
         return data_loader

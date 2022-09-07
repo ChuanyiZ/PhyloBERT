@@ -255,7 +255,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--semi_hard_steps", default=0, type=int, help="Use semi_hard_triplet_loss in semi_hard_steps.")
     parser.add_argument("--semi_hard_percent", default=0, type=float, help="Use semi_hard_triplet_loss in semi_hard_percent*total_steps.")
     parser.add_argument("--freeze_steps", default=0, type=int, help="Freeze part of the model in freeze_steps.")
-    parser.add_argument("--freeze_percent", default=0, type=float, help="Freeze part of the model in freeze_percent*total_steps.")
+    parser.add_argument("--freeze_ratio", default=0, type=float, help="Freeze part of the model in freeze_ratio*total_steps.")
     parser.add_argument("--freeze_layers", default=None, type=str, help="A list of prefixes of layers to be frozen.")
 
     parser.add_argument("--logging_steps", type=int, default=500, help="Log every X updates steps.")

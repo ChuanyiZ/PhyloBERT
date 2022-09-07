@@ -1,10 +1,10 @@
 from transformers import (
-    BertForMaskedLM,
     AutoConfig,
     AdamW,
     BertConfig,
     DataCollator,
     DefaultDataCollator,
+    DataCollatorForLanguageModeling,
     PretrainedConfig,
     TrainingArguments,
     EvalPrediction,
@@ -20,16 +20,21 @@ from datasets import (
 from .model_multitask import (
     MultitaskModel,
     MultitaskTrainer,
+    FreezingCallback,
 )
-from .model_siamese_bert import SiameseBertForSequenceClassification
+from .model_siamese_bert import (
+    CustomBertForMaskedLM,
+    SiameseBertForSequenceClassification,
+)
 from .tokenization_dna import DNATokenizer
 from .utils import get_args
 from datasets import load_dataset, Dataset
 import torch
-from typing import Dict, List, Union
+from typing import Dict, List, Union, Any
 import random
 import numpy as np
 from tqdm import tqdm, trange
+from dataclasses import dataclass
 
 
 # class CustomDataCollator(DefaultDataCollator):
@@ -56,6 +61,19 @@ from tqdm import tqdm, trange
 #     #       # otherwise, revert to using the default collate_batch
 #     #       return DefaultDataCollator().collate_batch(features)
 
+@dataclass
+class MultitaskDataCollator():
+    data_collator_dict: Dict[str, Any]
+    return_tensors: str = 'pt'
+
+    def __call__(self, features: List[Dict[str, Any]], return_tensors=None) -> Dict[str, Any]:
+        if return_tensors is None:
+            return_tensors = self.return_tensors
+        if len(features[0]["input_ids"].shape) == 2:
+            return self.data_collator_dict["clinvar"].__call__(features, return_tensors)
+        else:
+            return self.data_collator_dict["mlm"].__call__(features, return_tensors)
+
 
 def set_seed(args):
     random.seed(args.seed)
@@ -69,16 +87,16 @@ def main():
     multitask_model = MultitaskModel.create(
         model_path=args.model_name_or_path,
         model_type_dict={
-            # "mlm": BertForMaskedLM,
+            "mlm": CustomBertForMaskedLM,
             "clinvar_snv": SiameseBertForSequenceClassification,
             "clinvar": SiameseBertForSequenceClassification,
         },
         model_config_dict={
-            # "mlm": PretrainedConfig.from_pretrained(
-            #     args.config_name if args.config_name else args.model_name_or_path,
-            #     num_labels=1,
-            #     cache_dir=args.cache_dir if args.cache_dir else None,
-            # ),
+            "mlm": PretrainedConfig.from_pretrained(
+                args.config_name if args.config_name else args.model_name_or_path,
+                num_labels=1,
+                cache_dir=args.cache_dir if args.cache_dir else None,
+            ),
             "clinvar_snv": PretrainedConfig.from_pretrained(
                 args.config_name if args.config_name else args.model_name_or_path,
                 num_labels=2,
@@ -97,10 +115,10 @@ def main():
         print(model.bert.embeddings.word_embeddings.weight.data_ptr())
 
     dataset_dict: Dict[str, Dataset] = {
-        # "mlm": load_dataset(
-        #     "/home/chuanyi/project/phylobert/DNABERT/examples/sample_data/pre",
-        #     data_files={"train": "6_3k.txt"}
-        # ),
+        "mlm": load_dataset(
+            "/home/chuanyi/project/phylobert/DNABERT/examples/sample_data/pre",
+            data_files={"train": "6_3k.txt"}
+        ),
         "clinvar_snv": load_dataset(
             "/home/chuanyi/project/phylobert/data/ClinVar/data_snv",
             data_files={"train": "train.tsv", "eval": "dev.tsv"},
@@ -142,12 +160,17 @@ def main():
     def convert_text_to_features(example_batch):
         inputs = list(example_batch['text'])
         features = tokenizer.batch_encode_plus(
-            inputs, max_length=args.max_seq_length, pad_to_max_length=True
+            inputs,
+            max_length=args.max_seq_length,
+            add_special_tokens=True,
+            truncation=True,
+            padding='max_length',
+            return_special_tokens_mask=True,
         )
         return features
 
     convert_func_dict = {
-        # "mlm": convert_text_to_features,
+        "mlm": convert_text_to_features,
         "clinvar_snv": convert_example_pairs_to_features,
         "clinvar": convert_example_pairs_to_features,
     }
@@ -157,12 +180,13 @@ def main():
         features_dict[task_name][phase] = features_dict[task_name][phase].cast_column("attention_mask", feature=Array2D(shape=(2, -1), dtype="int8"))
 
     cast_func_dict = {
+        "mlm": lambda *_: None,
         "clinvar_snv": cast_func,
         "clinvar": cast_func,
     }
 
     columns_dict = {
-        # "mlm": ['input_ids', 'attention_mask'],
+        "mlm": ['input_ids', 'attention_mask', 'token_type_ids', 'special_tokens_mask'],
         "clinvar_snv": ['input_ids', 'attention_mask', 'labels'],
         "clinvar": ['input_ids', 'attention_mask', 'labels'],
     }
@@ -191,14 +215,6 @@ def main():
                 # features=features_dict[task_name],
                 cache_file_name=f"/home/chuanyi/project/phylobert/cache/cache-{task_name}-{phase}-{phase_dataset._fingerprint}.arrow"
             )
-            if any(
-                len(x["input_ids"][0]) != 512 or len(x["input_ids"][1]) != 512
-                for x in features_dict[task_name][phase]
-            ):
-                # set_trace()
-                print("debug")
-                print(max(len(x["input_ids"][0]) for x in features_dict[task_name][phase]))
-                print(max(len(x["input_ids"][1]) for x in features_dict[task_name][phase]))
             print(task_name, phase, len(phase_dataset), len(features_dict[task_name][phase]))
             cast_func_dict[task_name](features_dict, task_name, phase)
             features_dict[task_name][phase].set_format(
@@ -215,6 +231,13 @@ def main():
     eval_dataset = {
         task_name: dataset["eval"]
         for task_name, dataset in features_dict.items()
+        if "eval" in dataset
+    }
+
+    data_collator_dict = {
+        "mlm": DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15),
+        "clinvar_snv": DefaultDataCollator(),
+        "clinvar": DefaultDataCollator(),
     }
 
     trainer = MultitaskTrainer(
@@ -235,13 +258,15 @@ def main():
             warmup_ratio=0.1,
             weight_decay=0.01,
             include_inputs_for_metrics=True,
-            label_names=["labels"]
+            label_names=["labels"],
         ),
-        # data_collator=CustomDataCollator,
+        data_collator=MultitaskDataCollator(data_collator_dict),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         compute_metrics=compute_metrics
     )
+    # trainer.add_callback(FreezingCallback(trainer, args.freeze_ratio))
+
     trainer.train()
 
 if __name__ == "__main__":
