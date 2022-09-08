@@ -261,7 +261,7 @@ class MultitaskTrainer(Trainer):
         """
         Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
 
-        Works both with or without labels.
+        Works both with or without labels. Include `task_names` for multitasking.
         """
         args = self.args
 

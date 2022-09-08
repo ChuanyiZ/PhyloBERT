@@ -8,6 +8,7 @@ from transformers import (
     PretrainedConfig,
     TrainingArguments,
     EvalPrediction,
+    HfArgumentParser,
 )
 import evaluate
 from datasets import (
@@ -27,7 +28,7 @@ from .model_siamese_bert import (
     SiameseBertForSequenceClassification,
 )
 from .tokenization_dna import DNATokenizer
-from .utils import get_args
+from .utils import ModelArguments
 from datasets import load_dataset, Dataset
 import torch
 from typing import Dict, List, Union, Any
@@ -82,10 +83,12 @@ def set_seed(args):
 
 
 def main():
-    args = get_args()
+    # args = get_args()
+    parser = HfArgumentParser((TrainingArguments, ModelArguments))
+    train_args, args = parser.parse_args_into_dataclasses()
 
     multitask_model = MultitaskModel.create(
-        model_path=args.model_name_or_path,
+        model_path=args.bert_model_path,
         model_type_dict={
             "mlm": CustomBertForMaskedLM,
             "clinvar_snv": SiameseBertForSequenceClassification,
@@ -93,19 +96,16 @@ def main():
         },
         model_config_dict={
             "mlm": PretrainedConfig.from_pretrained(
-                args.config_name if args.config_name else args.model_name_or_path,
+                args.bert_model_path,
                 num_labels=1,
-                cache_dir=args.cache_dir if args.cache_dir else None,
             ),
             "clinvar_snv": PretrainedConfig.from_pretrained(
-                args.config_name if args.config_name else args.model_name_or_path,
+                args.bert_model_path,
                 num_labels=2,
-                cache_dir=args.cache_dir if args.cache_dir else None,
             ),
             "clinvar": PretrainedConfig.from_pretrained(
-                args.config_name if args.config_name else args.model_name_or_path,
+                args.bert_model_path,
                 num_labels=2,
-                cache_dir=args.cache_dir if args.cache_dir else None,
             ),
         },
     )
@@ -130,9 +130,8 @@ def main():
     }
 
     tokenizer = DNATokenizer.from_pretrained(
-        args.model_name_or_path,
+        args.bert_model_path,
         do_lower_case=args.do_lower_case,
-        cache_dir=args.cache_dir if args.cache_dir else None,
     )
 
     def convert_example_pairs_to_features(example_batch):
@@ -193,6 +192,8 @@ def main():
 
     metrics = evaluate.combine(["accuracy", "f1", "precision", "recall"])
 
+    # Force `include_inputs_for_metrics` to be true for computing metrics
+    train_args.include_inputs_for_metrics = True
     def compute_metrics(eval_pred: EvalPrediction):
         predictions, labels, inputs = eval_pred
         task_names = inputs[1]
@@ -240,26 +241,28 @@ def main():
         "clinvar": DefaultDataCollator(),
     }
 
+    # train_args = TrainingArguments(
+    #     output_dir="./models/nvoeriuh",
+    #     overwrite_output_dir=True,
+    #     learning_rate=7e-5,
+    #     do_train=True,
+    #     do_eval=True,
+    #     num_train_epochs=5.0,
+    #     # Adjust batch size if this doesn't fit on the Colab GPU
+    #     per_device_train_batch_size=8,
+    #     per_device_eval_batch_size=16,
+    #     evaluation_strategy='steps',
+    #     eval_steps=200,
+    #     save_steps=2000,
+    #     warmup_ratio=0.1,
+    #     weight_decay=0.01,
+    #     include_inputs_for_metrics=True,
+    #     label_names=["labels"],
+    # )
+
     trainer = MultitaskTrainer(
         model=multitask_model,
-        args=TrainingArguments(
-            output_dir="./models/nvoeriuh",
-            overwrite_output_dir=True,
-            learning_rate=7e-5,
-            do_train=True,
-            do_eval=True,
-            num_train_epochs=5.0,
-            # Adjust batch size if this doesn't fit on the Colab GPU
-            per_device_train_batch_size=8,
-            per_device_eval_batch_size=16,
-            evaluation_strategy='steps',
-            eval_steps=200,
-            save_steps=2000,
-            warmup_ratio=0.1,
-            weight_decay=0.01,
-            include_inputs_for_metrics=True,
-            label_names=["labels"],
-        ),
+        args=train_args,
         data_collator=MultitaskDataCollator(data_collator_dict),
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
