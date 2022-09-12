@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import List
 
 @dataclass
 class ModelArguments:
@@ -16,6 +17,14 @@ class ModelArguments:
                 "The maximum total input sequence length after tokenization. "
                 "Sequences longer than this will be truncated, sequences shorter "
                 "will be padded."
+            )
+        }
+    )
+    tasks: List[str] = field(
+        default_factory=lambda: ["mlm", "clinvar_snv", "clinvar"],
+        metadata={
+            "help": (
+                "Training tasks"
             )
         }
     )
