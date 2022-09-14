@@ -23,6 +23,7 @@ class ModelArguments:
     tasks: List[str] = field(
         default_factory=lambda: ["mlm", "clinvar_snv", "clinvar"],
         metadata={
+            "nargs": '+',
             "help": (
                 "Training tasks"
             )
