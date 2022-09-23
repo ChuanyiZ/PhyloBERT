@@ -73,7 +73,7 @@ class MultitaskDataCollator():
         if return_tensors is None:
             return_tensors = self.return_tensors
         if len(features[0]["input_ids"].shape) == 2:
-            return self.data_collator_dict["clinvar"].__call__(features, return_tensors)
+            return DefaultDataCollator().__call__(features, return_tensors)
         else:
             return self.data_collator_dict["mlm"].__call__(features, return_tensors)
 
@@ -101,6 +101,7 @@ def main():
     # args = get_args()
     parser = HfArgumentParser((TrainingArguments, ModelArguments))
     train_args, args = parser.parse_args_into_dataclasses()
+    train_args.optim="adamw_torch"
 
     set_seed(train_args)
 
