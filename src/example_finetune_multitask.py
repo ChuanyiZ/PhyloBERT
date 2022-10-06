@@ -1,4 +1,3 @@
-from grpc import Call
 from transformers import (
     AutoConfig,
     AdamW,
@@ -102,6 +101,7 @@ def main():
     parser = HfArgumentParser((TrainingArguments, ModelArguments))
     train_args, args = parser.parse_args_into_dataclasses()
     train_args.optim="adamw_torch"
+    train_args.report_to=["tensorboard"]
 
     set_seed(train_args)
 
@@ -278,7 +278,7 @@ def main():
         eval_dataset=eval_dataset,
         compute_metrics=compute_metrics,
     )
-    # trainer.add_callback(FreezingCallback(trainer, args.freeze_ratio))
+    trainer.add_callback(FreezingCallback(trainer, args.freeze_ratio))
 
     trainer.train()
 
