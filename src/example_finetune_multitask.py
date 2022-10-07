@@ -35,7 +35,6 @@ import torch
 from typing import Callable, Dict, List, Union, Any
 import random
 import numpy as np
-from tqdm import tqdm, trange
 from dataclasses import dataclass
 
 
@@ -190,6 +189,51 @@ def main():
             columns=['input_ids', 'attention_mask', 'labels'],
             data_collator=DefaultDataCollator()
         ),
+        "clinvar2": Task(
+            model_class=SiameseBertForSequenceClassification,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/home/chuanyi/project/phylobert/data/ClinVar2/data_patho",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_consequence": Task(
+            model_class=SiameseBertForSequenceClassification,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/home/chuanyi/project/phylobert/data/mc3/data_consequence",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_pheno": Task(
+            model_class=SiameseBertForSequenceClassification,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/home/chuanyi/project/phylobert/data/mc3/data_pheno",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
     }
 
     multitask_model = MultitaskModel.create(
@@ -281,6 +325,18 @@ def main():
     trainer.add_callback(FreezingCallback(trainer, args.freeze_ratio))
 
     trainer.train()
+
+    # preds_dict = {}
+    # for task_name in args.tasks:
+    #     eval_dataloader = DataLoaderWithTaskname(
+    #         task_name,
+    #         trainer.get_eval_dataloader(eval_dataset=features_dict[task_name]["validation"])
+    #     )
+    #     print(eval_dataloader.data_loader.collate_fn)
+    #     preds_dict[task_name] = trainer._prediction_loop(
+    #         eval_dataloader, 
+    #         description=f"Validation: {task_name}",
+    #     )
 
 if __name__ == "__main__":
     main()
