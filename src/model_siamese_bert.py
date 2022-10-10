@@ -8,7 +8,8 @@ from typing import List, Union, Optional, Tuple
 # import os
 
 import torch
-from torch import cat, nn, abs, sum
+from torch import LongTensor, Tensor, cat, nn, abs, sum
+import torch.nn.functional as F
 from torch.nn import (
     CrossEntropyLoss,
     MSELoss,
@@ -100,6 +101,132 @@ class SiameseBertForSequenceClassification(BertPreTrainedModel):
         tri = cat((pooled_output0, pooled_output1, diff), dim=1)
         tri = self.dropout(cat((pooled_output0, pooled_output1, diff), dim=1))
         logits = self.classifier(tri)
+
+        # TODO: get rid of `+ outputs0[2:]`
+        outputs = (logits,) + outputs0[2:]  # add hidden states and attention if they are here
+
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            outputs = (loss,) + outputs
+
+        return outputs  # (loss), logits, (hidden_states), (attentions)
+
+
+class SwitchLinear(nn.Module):
+    def __init__(self, in_features: int, out_features: int, channels: int):
+        super().__init__()
+        self.in_features = in_features
+        self.channels = channels
+        self.out_features = out_features
+        self.weight = nn.Parameter(torch.empty((out_features, in_features, channels)))
+        self.bias = nn.Parameter(torch.empty(out_features, channels))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.bias is not None:
+            fan_in = self.out_features
+            bound = 1 / math.sqrt(fan_in) if fan_in > 0 else 0
+            nn.init.uniform_(self.bias, -bound, bound)
+
+    def forward(self, x: Tensor, idx_channel: LongTensor) -> Tensor:
+        switch = F.one_hot(idx_channel, self.channels).float()
+        return torch.einsum('boi,bi->bo',
+                            torch.tensordot(switch, self.weight, dims=([1], [2])),
+                            x) + \
+               torch.tensordot(switch, self.bias, dims=([1], [1]))
+
+    def extra_repr(self) -> str:
+        return 'in_features={}, channels={}, out_features={}, bias={}'.format(
+            self.in_features, self.channels, self.out_features, self.bias is not None
+        )
+
+
+class MutBertForSequenceClassification(BertPreTrainedModel):
+    def __init__(self, config, num_task):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.num_task = num_task
+
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        # self.classifier = nn.Linear(config.hidden_size * 3, self.config.num_labels, bias=False)
+        self.classifier = nn.ModuleList([
+            SwitchLinear(config.hidden_size * 3, config.hidden_size * 3, num_task),
+            nn.ReLU(),
+            SwitchLinear(config.hidden_size * 3, config.hidden_size * 3, num_task),
+            nn.ReLU(),
+            SwitchLinear(config.hidden_size * 3, self.config.num_labels, num_task),
+        ])
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        task_ids=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        is_freeze: Union[bool, str, List[str]] = False,
+        *args,
+    ):
+        if is_freeze is False:
+            for param in self.bert.parameters():
+                param.requires_grad = True
+        elif is_freeze is True:
+            for name, param in self.bert.named_parameters():
+                param.requires_grad = False
+        elif isinstance(is_freeze, str):
+            for name, param in self.bert.named_parameters():
+                if name.startswith(is_freeze):
+                    param.requires_grad = False
+        elif isinstance(is_freeze, list):
+            for name, param in self.bert.named_parameters():
+                if any(name.startswith(prefix) for prefix in is_freeze):
+                    param.requires_grad = False
+
+        outputs0 = self.bert(
+            input_ids[:, 0, :],
+            attention_mask=attention_mask[:, 0, :],
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        outputs1 = self.bert(
+            input_ids[:, 1, :],
+            attention_mask=attention_mask[:, 1, :],
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        
+        pooled_output0 = outputs0[1]
+        pooled_output1 = outputs1[1]
+
+        # pooled_output0 = self.dropout(pooled_output0)
+        # pooled_output1 = self.dropout(pooled_output1)
+        # logits = self.classifier()
+        diff = abs(pooled_output0 - pooled_output1)
+        tri = cat((pooled_output0, pooled_output1, diff), dim=1)
+        tri = self.dropout(cat((pooled_output0, pooled_output1, diff), dim=1))
+        
+        y0 = self.classifier[0](tri, task_ids)
+        y1 = self.classifier[1](y0)
+        y2 = self.classifier[2](y1, task_ids)
+        y3 = self.classifier[3](y2)
+        logits = self.classifier[4](y3, task_ids)
 
         # TODO: get rid of `+ outputs0[2:]`
         outputs = (logits,) + outputs0[2:]  # add hidden states and attention if they are here
