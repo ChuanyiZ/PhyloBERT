@@ -27,6 +27,7 @@ from .model_multitask import (
 )
 from .model_siamese_bert import (
     CustomBertForMaskedLM,
+    MonoBertForSequenceClassification,
     SiameseBertForSequenceClassification,
 )
 from .tokenization_dna import DNATokenizer
@@ -146,6 +147,10 @@ def main():
         )
         return features
 
+    if args.use_mono_bert:
+        paired_bert_class = MonoBertForSequenceClassification
+    else:
+        paired_bert_class = SiameseBertForSequenceClassification
     model_dict: Dict[str, Task] = {
         "mlm": Task(
             model_class=CustomBertForMaskedLM,
@@ -163,7 +168,7 @@ def main():
             data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15),
         ),
         "clinvar_snv": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
@@ -178,7 +183,7 @@ def main():
             data_collator=DefaultDataCollator()
         ),
         "clinvar": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
@@ -193,7 +198,7 @@ def main():
             data_collator=DefaultDataCollator()
         ),
         "clinvar2": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
@@ -208,7 +213,7 @@ def main():
             data_collator=DefaultDataCollator()
         ),
         "mc3_consequence": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
@@ -223,7 +228,7 @@ def main():
             data_collator=DefaultDataCollator()
         ),
         "mc3_pheno": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,

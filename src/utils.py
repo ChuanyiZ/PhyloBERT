@@ -45,6 +45,11 @@ class ModelArguments:
         metadata={"help": "A list of prefixes of layers to be frozen."},
     )
 
+    use_mono_bert: bool = field(
+        default=False,
+        metadata={"help": "Set this flag if using mono BERT."},
+    )
+
 class MultitaskDataset(ConcatDataset):
     # def __init__(self, datasets):
     #     super(MyConcatDataset, self).__init__(datasets)

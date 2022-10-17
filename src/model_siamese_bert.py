@@ -117,6 +117,77 @@ class SiameseBertForSequenceClassification(BertPreTrainedModel):
 
         return outputs  # (loss), logits, (hidden_states), (attentions)
 
+class MonoBertForSequenceClassification(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Sequential(
+            nn.Linear(config.hidden_size, config.hidden_size * 3),
+            nn.ReLU(),
+            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.ReLU(),
+            nn.Linear(config.hidden_size * 3, self.config.num_labels),
+        )
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+        is_freeze: Union[bool, str, List[str]] = False,
+        *args,
+    ):
+        if is_freeze is False:
+            for param in self.bert.parameters():
+                param.requires_grad = True
+        elif is_freeze is True:
+            for name, param in self.bert.named_parameters():
+                param.requires_grad = False
+        elif isinstance(is_freeze, str):
+            for name, param in self.bert.named_parameters():
+                if name.startswith(is_freeze):
+                    param.requires_grad = False
+        elif isinstance(is_freeze, list):
+            for name, param in self.bert.named_parameters():
+                if any(name.startswith(prefix) for prefix in is_freeze):
+                    param.requires_grad = False
+
+        outputs1 = self.bert(
+            input_ids[:, 1, :],
+            attention_mask=attention_mask[:, 0, :],
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        
+        pooled_output0 = outputs1[1]
+        logits = self.classifier(pooled_output0)
+
+        # TODO: get rid of `+ outputs1[2:]`
+        outputs = (logits,) + outputs1[2:]  # add hidden states and attention if they are here
+
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            outputs = (loss,) + outputs
+
+        return outputs  # (loss), logits, (hidden_states), (attentions)
+
 
 class SwitchLinear(nn.Module):
     def __init__(self, in_features: int, out_features: int, channels: int):
