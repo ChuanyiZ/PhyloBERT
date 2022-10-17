@@ -553,7 +553,7 @@ class MultitaskTrainerFixed(Trainer):
         losses_host = None
         preds_host = None
         labels_host = None
-        inputs_host = None
+        # inputs_host = None
         task_host = None
 
         # losses/preds/labels on CPU (final containers)
@@ -577,7 +577,7 @@ class MultitaskTrainerFixed(Trainer):
 
             # Prediction step
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
-            inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
+            # inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
             task_ids = inputs["task_ids"] if args.include_inputs_for_metrics else None
 
 
@@ -589,14 +589,14 @@ class MultitaskTrainerFixed(Trainer):
                 labels = self._pad_across_processes(labels)
                 labels = self._nested_gather(labels)
                 labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
-            if inputs_decode is not None:
-                inputs_decode = self._pad_across_processes(inputs_decode)
-                inputs_decode = self._nested_gather(inputs_decode)
-                inputs_host = (
-                    inputs_decode
-                    if inputs_host is None
-                    else nested_concat(inputs_host, inputs_decode, padding_index=-100)
-                )
+            # if inputs_decode is not None:
+            #     inputs_decode = self._pad_across_processes(inputs_decode)
+            #     inputs_decode = self._nested_gather(inputs_decode)
+            #     inputs_host = (
+            #         inputs_decode
+            #         if inputs_host is None
+            #         else nested_concat(inputs_host, inputs_decode, padding_index=-100)
+            #     )
             task_ids = self._nested_gather(task_ids)
             task_host = task_ids if task_host is None else nested_concat(task_host, task_ids, padding_index=-100)
             if logits is not None:
@@ -615,13 +615,13 @@ class MultitaskTrainerFixed(Trainer):
                 if preds_host is not None:
                     logits = nested_numpify(preds_host)
                     all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-                if inputs_host is not None:
-                    inputs_decode = nested_numpify(inputs_host)
-                    all_inputs = (
-                        inputs_decode
-                        if all_inputs is None
-                        else nested_concat(all_inputs, inputs_decode, padding_index=-100)
-                    )
+                # if inputs_host is not None:
+                #     inputs_decode = nested_numpify(inputs_host)
+                #     all_inputs = (
+                #         inputs_decode
+                #         if all_inputs is None
+                #         else nested_concat(all_inputs, inputs_decode, padding_index=-100)
+                #     )
                 if labels_host is not None:
                     labels = nested_numpify(labels_host)
                     all_labels = (
@@ -641,11 +641,11 @@ class MultitaskTrainerFixed(Trainer):
         if preds_host is not None:
             logits = nested_numpify(preds_host)
             all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-        if inputs_host is not None:
-            inputs_decode = nested_numpify(inputs_host)
-            all_inputs = (
-                inputs_decode if all_inputs is None else nested_concat(all_inputs, inputs_decode, padding_index=-100)
-            )
+        # if inputs_host is not None:
+        #     inputs_decode = nested_numpify(inputs_host)
+        #     all_inputs = (
+        #         inputs_decode if all_inputs is None else nested_concat(all_inputs, inputs_decode, padding_index=-100)
+        #     )
         tasks = nested_numpify(task_host)
         all_task_ids = tasks if all_task_ids is None else nested_concat(all_task_ids, tasks, padding_index=-100)
         if labels_host is not None:
@@ -675,9 +675,10 @@ class MultitaskTrainerFixed(Trainer):
             all_labels = nested_truncate(all_labels, num_samples)
         if all_task_ids is not None:
             all_task_ids = nested_truncate(all_task_ids, num_samples)
-        if all_inputs is not None:
-            all_inputs = nested_truncate(all_inputs, num_samples)
-            all_inputs = (all_inputs, all_task_ids)
+        # if all_inputs is not None:
+        #     all_inputs = nested_truncate(all_inputs, num_samples)
+        #     all_inputs = (all_inputs, all_task_ids)
+        all_inputs = (all_inputs, all_task_ids)
 
         # Metrics!
         if self.compute_metrics is not None and all_preds is not None and all_labels is not None:
