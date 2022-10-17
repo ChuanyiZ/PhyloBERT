@@ -93,9 +93,11 @@ class MultitaskModel(PreTrainedModel):
         shared_encoder = None
         taskmodels_dict = {}
         for task_name, model_type in model_type_dict.items():
+            config = model_config_dict[task_name]
+            config.classifier_dropout = None
             model = model_type.from_pretrained(
                 model_path, 
-                config=model_config_dict[task_name],
+                config=config,
             )
             
             if shared_encoder is None:
@@ -198,8 +200,8 @@ class MultitaskDataloader:
             for i, task_name in enumerate(self.task_name_list):
                 task_choice_list += [i] * self.num_batches_dict[task_name]
         elif self.sampling_method == "minimum":
-            task_choice_list = [[i] * self.min_size for i in range(len(self.num_batches_dict))]
-        task_choice_list = np.array(task_choice_list)
+            task_choice_list = np.concatenate([[i] * self.min_size for i in range(len(self.num_batches_dict))])
+        task_choice_list = np.array(task_choice_list).astype(int)
         np.random.shuffle(task_choice_list)
         dataloader_iter_dict = {
             task_name: iter(dataloader)
@@ -243,7 +245,7 @@ class MultitaskTrainer(Trainer):
         return MultitaskDataloader({
             task_name: self.get_single_dataloader(task_name, task_dataset)
             for task_name, task_dataset in self.train_dataset.items()
-        })
+        }, sampling_method="minimum")
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
@@ -252,7 +254,7 @@ class MultitaskTrainer(Trainer):
         return MultitaskDataloader({
             task_name: self.get_single_dataloader(task_name, task_dataset)
             for task_name, task_dataset in eval_dataset.items()
-        })
+        }, sampling_method="minimum")
 
     def evaluation_loop(
         self,
@@ -304,7 +306,7 @@ class MultitaskTrainer(Trainer):
         losses_host = None
         preds_host = None
         labels_host = None
-        inputs_host = None
+        # inputs_host = None
 
         # losses/preds/labels on CPU (final containers)
         all_losses = None
@@ -327,7 +329,7 @@ class MultitaskTrainer(Trainer):
 
             # Prediction step
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
-            inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
+            # inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
             task_name = inputs["task_name"] if args.include_inputs_for_metrics else None
 
 
@@ -339,15 +341,15 @@ class MultitaskTrainer(Trainer):
                 labels = self._pad_across_processes(labels)
                 labels = self._nested_gather(labels)
                 labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
-            if inputs_decode is not None:
-                inputs_decode = self._pad_across_processes(inputs_decode)
-                inputs_decode = self._nested_gather(inputs_decode)
-                inputs_host = (
-                    inputs_decode
-                    if inputs_host is None
-                    else nested_concat(inputs_host, inputs_decode, padding_index=-100)
-                )
-            all_task_name += [task_name] * batch_size
+            # if inputs_decode is not None:
+            #     inputs_decode = self._pad_across_processes(inputs_decode)
+            #     inputs_decode = self._nested_gather(inputs_decode)
+            #     inputs_host = (
+            #         inputs_decode
+            #         if inputs_host is None
+            #         else nested_concat(inputs_host, inputs_decode, padding_index=-100)
+            #     )
+            all_task_name += [task_name] * observed_batch_size
             if logits is not None:
                 logits = self._pad_across_processes(logits)
                 logits = self._nested_gather(logits)
@@ -364,13 +366,13 @@ class MultitaskTrainer(Trainer):
                 if preds_host is not None:
                     logits = nested_numpify(preds_host)
                     all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-                if inputs_host is not None:
-                    inputs_decode = nested_numpify(inputs_host)
-                    all_inputs = (
-                        inputs_decode
-                        if all_inputs is None
-                        else nested_concat(all_inputs, inputs_decode, padding_index=-100)
-                    )
+                # if inputs_host is not None:
+                #     inputs_decode = nested_numpify(inputs_host)
+                #     all_inputs = (
+                #         inputs_decode
+                #         if all_inputs is None
+                #         else nested_concat(all_inputs, inputs_decode, padding_index=-100)
+                #     )
                 if labels_host is not None:
                     labels = nested_numpify(labels_host)
                     all_labels = (
@@ -378,6 +380,8 @@ class MultitaskTrainer(Trainer):
                     )
                 # Set back to None to begin a new accumulation
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
+            
+            assert preds_host.shape[0] == len(all_task_name)
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
@@ -390,12 +394,12 @@ class MultitaskTrainer(Trainer):
         if preds_host is not None:
             logits = nested_numpify(preds_host)
             all_preds = logits if all_preds is None else nested_concat(all_preds, logits, padding_index=-100)
-        if inputs_host is not None:
-            inputs_decode = nested_numpify(inputs_host)
-            all_inputs = (
-                inputs_decode if all_inputs is None else nested_concat(all_inputs, inputs_decode, padding_index=-100)
-            )
-        all_task_name += [task_name] * batch_size
+        # if inputs_host is not None:
+        #     inputs_decode = nested_numpify(inputs_host)
+        #     all_inputs = (
+        #         inputs_decode if all_inputs is None else nested_concat(all_inputs, inputs_decode, padding_index=-100)
+        #     )
+        # all_task_name += [task_name] * observed_batch_size
         if labels_host is not None:
             labels = nested_numpify(labels_host)
             all_labels = labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
@@ -423,9 +427,12 @@ class MultitaskTrainer(Trainer):
             all_labels = nested_truncate(all_labels, num_samples)
         if all_task_name is not None:
             all_task_name = nested_truncate(np.array(all_task_name), num_samples)
-        if all_inputs is not None:
-            all_inputs = nested_truncate(all_inputs, num_samples)
-            all_inputs = (all_inputs, all_task_name)
+        # if all_inputs is not None:
+        #     all_inputs = nested_truncate(all_inputs, num_samples)
+        #     all_inputs = (all_inputs, all_task_name)
+        all_inputs = (all_inputs, all_task_name)
+
+        assert len(all_task_name) == all_preds.shape[0]
 
         # Metrics!
         if self.compute_metrics is not None and all_preds is not None and all_labels is not None:

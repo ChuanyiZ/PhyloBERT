@@ -2,6 +2,7 @@ from transformers import (
     AutoConfig,
     AdamW,
     BertConfig,
+    BertForSequenceClassification,
     BertPreTrainedModel,
     DataCollator,
     DefaultDataCollator,
@@ -70,10 +71,12 @@ class MultitaskDataCollator():
     def __call__(self, features: List[Dict[str, Any]], return_tensors=None) -> Dict[str, Any]:
         if return_tensors is None:
             return_tensors = self.return_tensors
-        if len(features[0]["input_ids"].shape) == 2:
-            return DefaultDataCollator().__call__(features, return_tensors)
-        else:
-            return self.data_collator_dict["mlm"].__call__(features, return_tensors)
+        return DefaultDataCollator().__call__(features, return_tensors)
+        # TODO: make data collator compatible to all training sets
+        # if len(features[0]["input_ids"].shape) == 2:
+        #     return DefaultDataCollator().__call__(features, return_tensors)
+        # else:
+        #     return self.data_collator_dict["mlm"].__call__(features, return_tensors)
 
 
 def set_seed(args):
@@ -131,8 +134,8 @@ def main():
         features_mut["labels"] = example_batch["label"]
         return features_mut
 
-    def convert_text_to_features(example_batch):
-        inputs = list(example_batch['text'])
+    def convert_text_to_features(example_batch, label):
+        inputs = list(example_batch[label])
         features = tokenizer.batch_encode_plus(
             inputs,
             max_length=args.max_seq_length,
@@ -154,7 +157,7 @@ def main():
                 "/home/chuanyi/project/phylobert/DNABERT/examples/sample_data/pre",
                 data_files={"train": "6_3k.txt"}
             ),
-            convert_func=convert_text_to_features,
+            convert_func=lambda x: convert_text_to_features(x, "text"),
             cast_func=lambda *_: None,
             columns=['input_ids', 'attention_mask', 'token_type_ids', 'special_tokens_mask'],
             data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15),
@@ -232,6 +235,21 @@ def main():
             convert_func=convert_example_pairs_to_features,
             cast_func=cast_func,
             columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "coding": Task(
+            model_class=BertForSequenceClassification,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/home/chuanyi/project/phylobert/data/coding/data",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"},
+            ),
+            convert_func=lambda x: convert_text_to_features(x, "sequence"),
+            cast_func=lambda *_: None,
+            columns=['input_ids', 'attention_mask', 'label'],
             data_collator=DefaultDataCollator()
         ),
     }
