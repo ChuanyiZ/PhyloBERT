@@ -1,14 +1,14 @@
 export KMER=6
-export TRAIN_FILE="/hdd/phylobert_data/pretrain/6mer_chr20_cut6"
+export SOURCE="/home/chuanyi/project/phylobert/"
+export TRAIN_FILE=$SOURCE"/PhyloBERT/example/data/6_3k.txt"
 export TEST_FILE=$TRAIN_FILE
-export SOURCE="/home/chuanyi/project/phylobert/DNABERT"
-export OUTPUT_PATH="/hdd/phylobert_data/models/pretrain"
+export OUTPUT_PATH="/home/jupyter/models/pretrain"
 
 python run_pretrain.py \
     --output_dir $OUTPUT_PATH \
     --model_type=dna \
-    --tokenizer_name="/home/chuanyi/project/phylobert/DNABERT/model/6-new-12w-0" \
-    --config_name=$SOURCE/src/transformers/dnabert-config/bert-config-$KMER/config.json \
+    --tokenizer_name=$SOURCE"/PhyloBERT/example/data/6-new-12w-0" \
+    --config_name=$SOURCE"/PhyloBERT/example/data/6-new-12w-0/config.json" \
     --do_train \
     --train_data_file=$TRAIN_FILE \
     --do_eval \
@@ -32,5 +32,4 @@ python run_pretrain.py \
     --mlm_probability 0.025 \
     --warmup_steps 10000 \
     --overwrite_output_dir \
-    --n_process 8 \
-    --fp16
+    --n_process 4
