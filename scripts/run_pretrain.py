@@ -59,13 +59,17 @@ from transformers import (
     OpenAIGPTTokenizer,
     PreTrainedModel,
     PreTrainedTokenizer,
+    RoFormerConfig,
+    RoFormerForMaskedLM,
     RobertaConfig,
     RobertaForMaskedLM,
     RobertaTokenizer,
     get_linear_schedule_with_warmup,
+    default_data_collator,
 )
 
 from tokenization_dna import DNATokenizer
+from datasets import load_dataset, Dataset
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -80,6 +84,7 @@ MODEL_CLASSES = {
     "gpt2": (GPT2Config, GPT2LMHeadModel, GPT2Tokenizer),
     "openai-gpt": (OpenAIGPTConfig, OpenAIGPTLMHeadModel, OpenAIGPTTokenizer),
     "dna": (BertConfig, BertForMaskedLM, DNATokenizer),
+    "dna_rope": (RoFormerConfig, RoFormerForMaskedLM, DNATokenizer),
     "bert": (BertConfig, BertForMaskedLM, BertTokenizer),
     "roberta": (RobertaConfig, RobertaForMaskedLM, RobertaTokenizer),
     "distilbert": (DistilBertConfig, DistilBertForMaskedLM, DistilBertTokenizer),
@@ -194,12 +199,42 @@ class LineByLineTextDataset(Dataset):
         return torch.tensor(self.examples[i], dtype=torch.long)
 
 
+def convert_text_to_features(example_batch, tokenizer):
+    inputs = list(example_batch["text"])
+    features = tokenizer.batch_encode_plus(
+        inputs,
+        max_length=512,
+        add_special_tokens=True,
+        truncation=True,
+        padding='max_length',
+        return_special_tokens_mask=True,
+    )
+    return features
+
+
 def load_and_cache_examples(args, tokenizer, evaluate=False):
-    file_path = args.eval_data_file if evaluate else args.train_data_file
-    if args.line_by_line:
-        return LineByLineTextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+    file_path: str = args.eval_data_file if evaluate else args.train_data_file
+    dataset = load_dataset(
+        'text',
+        data_files=file_path,
+    )
+    if '/' in file_path:
+        file_id = file_path[file_path.rfind('/')+1:].replace('.', '-')
     else:
-        return TextDataset(tokenizer, args, file_path=file_path, block_size=args.block_size)
+        file_id = file_path.replace('.', '-')
+    dataset = dataset.map(
+        lambda x: convert_text_to_features(x, tokenizer),
+        batched=True,
+        num_proc=8,
+        cache_file_names={
+            "train": f"/hdd/phylobert_data/cache/cache-pretrain-{file_id}.arrow"
+        }
+    )
+    dataset.set_format(
+        type="torch",
+        columns=['input_ids', 'attention_mask', 'token_type_ids', 'special_tokens_mask'],
+    )
+    return dataset
 
 
 def set_seed(args):
@@ -248,7 +283,7 @@ def _rotate_checkpoints(args, checkpoint_prefix="checkpoint", use_mtime=False) -
 
 
 
-def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> Tuple[torch.Tensor, torch.Tensor]:
+def mask_tokens(batch: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> Tuple[torch.Tensor, torch.Tensor]:
     """ Prepare masked tokens inputs/labels for masked language modeling: 80% MASK, 10% random, 10% original. """
     
     mask_list = MASK_LIST[tokenizer.kmer]
@@ -258,13 +293,17 @@ def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> T
             "This tokenizer does not have a mask token which is necessary for masked language modeling. Remove the --mlm flag if you want to use this tokenizer."
         )
 
+    inputs = batch["input_ids"]
     labels = inputs.clone()
     # We sample a few tokens in each sequence for masked-LM training (with probability args.mlm_probability defaults to 0.15 in Bert/RoBERTa)
     probability_matrix = torch.full(labels.shape, args.mlm_probability)
-    special_tokens_mask = [
-        tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
-    ]
-    probability_matrix.masked_fill_(torch.tensor(special_tokens_mask, dtype=torch.bool), value=0.0)
+    if "special_tokens_mask" not in batch:
+        special_tokens_mask = [
+            tokenizer.get_special_tokens_mask(val, already_has_special_tokens=True) for val in labels.tolist()
+        ]
+    else:
+        special_tokens_mask = batch["special_tokens_mask"].bool()
+    probability_matrix.masked_fill_(special_tokens_mask, value=0.0)
     if tokenizer._pad_token is not None:
         padding_mask = labels.eq(tokenizer.pad_token_id)
         probability_matrix.masked_fill_(padding_mask, value=0.0)
@@ -274,7 +313,11 @@ def mask_tokens(inputs: torch.Tensor, tokenizer: PreTrainedTokenizer, args) -> T
     # change masked indices
     masks = deepcopy(masked_indices)
     for i, masked_index in enumerate(masks):
-        end = torch.where(probability_matrix[i]!=0)[0].tolist()[-1]
+        end = torch.where(probability_matrix[i]!=0)[0].tolist()
+        if len(end) == 0:
+            continue
+        else:
+            end = end[-1]
         mask_centers = set(torch.where(masked_index==1)[0].tolist())
         new_centers = deepcopy(mask_centers)
         for center in mask_centers:
@@ -308,14 +351,14 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
 
-    def collate(examples: List[torch.Tensor]):
-        if tokenizer._pad_token is None:
-            return pad_sequence(examples, batch_first=True)
-        return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
+    # def collate(examples: List[torch.Tensor]):
+    #     if tokenizer._pad_token is None:
+    #         return pad_sequence(examples, batch_first=True)
+    #     return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
 
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     train_dataloader = DataLoader(
-        train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn=collate
+        train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, collate_fn=default_data_collator
     )
 
     if args.max_steps > 0:
@@ -427,9 +470,9 @@ def train(args, train_dataset, model: PreTrainedModel, tokenizer: PreTrainedToke
             # print(ids_set)
             inputs = inputs.to(args.device)
             labels = labels.to(args.device)
+            attention = batch['attention_mask'].to(args.device)
             model.train()
-            # outputs = model(inputs, masked_lm_labels=labels) if args.mlm else model(inputs, labels=labels)
-            outputs = model(inputs, labels=labels)
+            outputs = model(inputs, labels=labels, attention_mask=attention)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
             if args.n_gpu > 1:
@@ -834,7 +877,7 @@ def main():
         if args.local_rank == 0:
             torch.distributed.barrier()
 
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer)
+        global_step, tr_loss = train(args, train_dataset['train'], model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     # Saving best-practices: if you use save_pretrained for the model and tokenizer, you can reload them using from_pretrained()
