@@ -209,10 +209,11 @@ def convert_text_to_features(example_batch, tokenizer):
         padding='max_length',
         return_special_tokens_mask=True,
     )
+    assert len(features['input_ids'][0]) == len(features['special_tokens_mask'][0])
     return features
 
 
-def load_and_cache_examples(args, tokenizer, evaluate=False):
+def load_and_cache_examples(args, tokenizer, evaluate=False, num_proc=8):
     file_path: str = args.eval_data_file if evaluate else args.train_data_file
     dataset = load_dataset(
         'text',
@@ -225,7 +226,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False):
     dataset = dataset.map(
         lambda x: convert_text_to_features(x, tokenizer),
         batched=True,
-        num_proc=8,
+        num_proc=num_proc,
         cache_file_names={
             "train": f"/hdd/phylobert_data/cache/cache-pretrain-{file_id}.arrow"
         }
@@ -546,7 +547,7 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_output_dir = args.output_dir
 
-    eval_dataset = load_and_cache_examples(args, tokenizer, evaluate=True)
+    eval_dataset = load_and_cache_examples(args, tokenizer, evaluate=True, num_proc=8)["train"]
 
     if args.local_rank in [-1, 0]:
         os.makedirs(eval_output_dir, exist_ok=True)
@@ -554,14 +555,9 @@ def evaluate(args, model: PreTrainedModel, tokenizer: PreTrainedTokenizer, prefi
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
     # Note that DistributedSampler samples randomly
 
-    def collate(examples: List[torch.Tensor]):
-        if tokenizer._pad_token is None:
-            return pad_sequence(examples, batch_first=True)
-        return pad_sequence(examples, batch_first=True, padding_value=tokenizer.pad_token_id)
-
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(
-        eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, collate_fn=collate
+        eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size, collate_fn=default_data_collator
     )
 
     # multi-gpu evaluate
