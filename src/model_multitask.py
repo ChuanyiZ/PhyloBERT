@@ -42,7 +42,7 @@ from torch.utils.data import (
     RandomSampler,
     DistributedSampler,
 )
-from .utils import MultitaskDataset
+# from .utils import MultitaskDataset
 
 logger = logging.getLogger(__name__)
 

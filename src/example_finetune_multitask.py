@@ -72,12 +72,12 @@ class MultitaskDataCollator():
     def __call__(self, features: List[Dict[str, Any]], return_tensors=None) -> Dict[str, Any]:
         if return_tensors is None:
             return_tensors = self.return_tensors
-        return DefaultDataCollator().__call__(features, return_tensors)
+        # return DefaultDataCollator().__call__(features, return_tensors)
         # TODO: make data collator compatible to all training sets
-        # if len(features[0]["input_ids"].shape) == 2:
-        #     return DefaultDataCollator().__call__(features, return_tensors)
-        # else:
-        #     return self.data_collator_dict["mlm"].__call__(features, return_tensors)
+        if len(features[0]["input_ids"].shape) == 2:
+            return DefaultDataCollator().__call__(features, return_tensors)
+        else:
+            return self.data_collator_dict["mlm"].__call__(features, return_tensors)
 
 
 def set_seed(args):
@@ -262,7 +262,12 @@ def main():
     multitask_model = MultitaskModel.create(
         model_path=args.bert_model_path,
         model_type_dict={task: model_dict[task].model_class for task in args.tasks},
-        model_config_dict={task: model_dict[task].config(args.bert_model_path) for task in args.tasks},
+        model_config_dict={
+            task:
+                model_dict[task].config(args.bert_model_config_path) if args.bert_model_config_path
+                else model_dict[task].config(args.bert_model_path)
+            for task in args.tasks
+        },
     )
 
     print(multitask_model.encoder.embeddings.word_embeddings.weight.data_ptr())
