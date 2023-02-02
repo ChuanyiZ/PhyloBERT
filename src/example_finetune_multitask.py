@@ -2,6 +2,7 @@ from transformers import (
     AutoConfig,
     AdamW,
     BertConfig,
+    BertForSequenceClassification,
     BertPreTrainedModel,
     DataCollator,
     DefaultDataCollator,
@@ -26,6 +27,7 @@ from .model_multitask import (
 )
 from .model_siamese_bert import (
     CustomBertForMaskedLM,
+    MonoBertForSequenceClassification,
     SiameseBertForSequenceClassification,
 )
 from .tokenization_dna import DNATokenizer
@@ -35,7 +37,6 @@ import torch
 from typing import Callable, Dict, List, Union, Any
 import random
 import numpy as np
-from tqdm import tqdm, trange
 from dataclasses import dataclass
 
 
@@ -71,6 +72,8 @@ class MultitaskDataCollator():
     def __call__(self, features: List[Dict[str, Any]], return_tensors=None) -> Dict[str, Any]:
         if return_tensors is None:
             return_tensors = self.return_tensors
+        # return DefaultDataCollator().__call__(features, return_tensors)
+        # TODO: make data collator compatible to all training sets
         if len(features[0]["input_ids"].shape) == 2:
             return DefaultDataCollator().__call__(features, return_tensors)
         else:
@@ -132,8 +135,8 @@ def main():
         features_mut["labels"] = example_batch["label"]
         return features_mut
 
-    def convert_text_to_features(example_batch):
-        inputs = list(example_batch['text'])
+    def convert_text_to_features(example_batch, label):
+        inputs = list(example_batch[label])
         features = tokenizer.batch_encode_plus(
             inputs,
             max_length=args.max_seq_length,
@@ -144,6 +147,10 @@ def main():
         )
         return features
 
+    if args.use_mono_bert:
+        paired_bert_class = MonoBertForSequenceClassification
+    else:
+        paired_bert_class = SiameseBertForSequenceClassification
     model_dict: Dict[str, Task] = {
         "mlm": Task(
             model_class=CustomBertForMaskedLM,
@@ -152,22 +159,22 @@ def main():
                 num_labels=1,
             ),
             dataset=lambda: load_dataset(
-                "/home/chuanyi/project/phylobert/DNABERT/examples/sample_data/pre",
+                "/projects/PUR-IRL/bert_dna/data/pretrain/data",
                 data_files={"train": "6_3k.txt"}
             ),
-            convert_func=convert_text_to_features,
+            convert_func=lambda x: convert_text_to_features(x, "text"),
             cast_func=lambda *_: None,
             columns=['input_ids', 'attention_mask', 'token_type_ids', 'special_tokens_mask'],
             data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=True, mlm_probability=0.15),
         ),
         "clinvar_snv": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
             ),
             dataset=lambda: load_dataset(
-                "/home/chuanyi/project/phylobert/data/ClinVar/data_snv",
+                "/lus/grand/projects/PUR-IRL/bert_dna/data/ClinVar2/data_snv",
                 data_files={"train": "train.tsv", "eval": "dev.tsv"},
             ),
             convert_func=convert_example_pairs_to_features,
@@ -176,13 +183,148 @@ def main():
             data_collator=DefaultDataCollator()
         ),
         "clinvar": Task(
-            model_class=SiameseBertForSequenceClassification,
+            model_class=paired_bert_class,
             config=lambda path: PretrainedConfig.from_pretrained(
                 path,
                 num_labels=2,
             ),
             dataset=lambda: load_dataset(
-                "/home/chuanyi/project/phylobert/data/ClinVar",
+                "/lus/grand/projects/PUR-IRL/bert_dna/data/ClinVar/data_pathogenic",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "clinvar2_snv": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/ClinVar2/data_snv",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "clinvar2": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/ClinVar2/data_patho",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_consequence": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/mc3/data_consequence",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_pheno": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/mc3/data_pheno",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_consequence_large": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/mc3/large/data_consequence",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "mc3_pheno_large": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/mc3/large/data_pheno",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "coding": Task(
+            model_class=BertForSequenceClassification,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/coding/data",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"},
+            ),
+            convert_func=lambda x: convert_text_to_features(x, "sequence"),
+            cast_func=lambda *_: None,
+            columns=['input_ids', 'attention_mask', 'label'],
+            data_collator=DefaultDataCollator()
+        ),
+        "clinvar_random_32_patho": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/complete/random_32/data_patho",
+                data_files={"train": "train.tsv", "eval": "dev.tsv"}
+            ),
+            convert_func=convert_example_pairs_to_features,
+            cast_func=cast_func,
+            columns=['input_ids', 'attention_mask', 'labels'],
+            data_collator=DefaultDataCollator()
+        ),
+        "clinvar_random_32_snv": Task(
+            model_class=paired_bert_class,
+            config=lambda path: PretrainedConfig.from_pretrained(
+                path,
+                num_labels=2,
+            ),
+            dataset=lambda: load_dataset(
+                "/projects/PUR-IRL/bert_dna/data/complete/random_32/data_snv",
                 data_files={"train": "train.tsv", "eval": "dev.tsv"}
             ),
             convert_func=convert_example_pairs_to_features,
@@ -195,7 +337,12 @@ def main():
     multitask_model = MultitaskModel.create(
         model_path=args.bert_model_path,
         model_type_dict={task: model_dict[task].model_class for task in args.tasks},
-        model_config_dict={task: model_dict[task].config(args.bert_model_path) for task in args.tasks},
+        model_config_dict={
+            task:
+                model_dict[task].config(args.bert_model_config_path) if args.bert_model_config_path
+                else model_dict[task].config(args.bert_model_path)
+            for task in args.tasks
+        },
     )
 
     print(multitask_model.encoder.embeddings.word_embeddings.weight.data_ptr())
@@ -227,8 +374,9 @@ def main():
             features_dict[task_name][phase] = phase_dataset.map(
                 model_dict[task_name].convert_func,
                 batched=True,
+                num_proc=32,
                 # features=features_dict[task_name],
-                cache_file_name=f"/home/chuanyi/project/phylobert/cache/cache-{task_name}-{phase}-{phase_dataset._fingerprint}.arrow"
+                cache_file_name=f"/projects/PUR-IRL/bert_dna/data/cache/cache-{task_name}-{phase}-{phase_dataset._fingerprint}.arrow"
             )
             print(task_name, phase, len(phase_dataset), len(features_dict[task_name][phase]))
             model_dict[task_name].cast_func(features_dict, task_name, phase)
@@ -281,6 +429,18 @@ def main():
     trainer.add_callback(FreezingCallback(trainer, args.freeze_ratio))
 
     trainer.train()
+
+    # preds_dict = {}
+    # for task_name in args.tasks:
+    #     eval_dataloader = DataLoaderWithTaskname(
+    #         task_name,
+    #         trainer.get_eval_dataloader(eval_dataset=features_dict[task_name]["validation"])
+    #     )
+    #     print(eval_dataloader.data_loader.collate_fn)
+    #     preds_dict[task_name] = trainer._prediction_loop(
+    #         eval_dataloader, 
+    #         description=f"Validation: {task_name}",
+    #     )
 
 if __name__ == "__main__":
     main()
