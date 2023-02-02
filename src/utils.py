@@ -8,6 +8,10 @@ class ModelArguments:
     bert_model_path: str = field(
         metadata={"help": "The directory storing the base BERT encoder."},
     )
+    bert_model_config_path: str = field(
+        default=None,
+        metadata={"help": "The path to the configuration JSON file."},
+    )
     do_lower_case: bool = field(
         default=True,
         metadata={"help": "Set this flag if you are using an uncased model."},

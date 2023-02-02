@@ -213,6 +213,24 @@ class MultitaskDataloader:
 
 
 class MultitaskTrainer(Trainer):
+    def __init__(self,
+        model: Union[PreTrainedModel, nn.Module] = None,
+        args: TrainingArguments = None,
+        data_collator: Optional[DataCollator] = None,
+        train_dataset: Optional[Dataset] = None,
+        eval_dataset: Optional[Dataset] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+        model_init: Callable[[], PreTrainedModel] = None,
+        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+        callbacks: Optional[List[TrainerCallback]] = None,
+        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
+        task_names: List[str] = None,
+    ):
+        super().__init__(model, args, data_collator, train_dataset, eval_dataset, tokenizer, model_init, compute_metrics, callbacks, optimizers, preprocess_logits_for_metrics)
+        self.task_names = task_names
+        self.task_mapping = {task: i for i, task in enumerate(task_names)}
+
     def get_single_dataloader(self, task_name, dataset):
         """
         Create a single-task data loader that also yields task names
@@ -245,7 +263,7 @@ class MultitaskTrainer(Trainer):
         return MultitaskDataloader({
             task_name: self.get_single_dataloader(task_name, task_dataset)
             for task_name, task_dataset in self.train_dataset.items()
-        }, sampling_method="minimum")
+        })
 
     def get_eval_dataloader(self, eval_dataset=None) -> DataLoader:
         if eval_dataset is None and self.eval_dataset is None:
@@ -254,7 +272,7 @@ class MultitaskTrainer(Trainer):
         return MultitaskDataloader({
             task_name: self.get_single_dataloader(task_name, task_dataset)
             for task_name, task_dataset in eval_dataset.items()
-        }, sampling_method="minimum")
+        })
 
     def evaluation_loop(
         self,
@@ -306,6 +324,7 @@ class MultitaskTrainer(Trainer):
         losses_host = None
         preds_host = None
         labels_host = None
+        task_host = None
         # inputs_host = None
 
         # losses/preds/labels on CPU (final containers)
@@ -313,7 +332,7 @@ class MultitaskTrainer(Trainer):
         all_preds = None
         all_labels = None
         all_inputs = None
-        all_task_name = []
+        all_task_name = None
         # Will be useful when we have an iterable dataset so don't know its length.
 
         observed_num_examples = 0
@@ -329,8 +348,9 @@ class MultitaskTrainer(Trainer):
 
             # Prediction step
             loss, logits, labels = self.prediction_step(model, inputs, prediction_loss_only, ignore_keys=ignore_keys)
+            print("A", logits.shape, labels.shape)
             # inputs_decode = self._prepare_input(inputs["input_ids"]) if args.include_inputs_for_metrics else None
-            task_name = inputs["task_name"] if args.include_inputs_for_metrics else None
+            task_name = self.task_mapping[inputs["task_name"]] if args.include_inputs_for_metrics else None
 
 
             # Update containers on host
@@ -340,6 +360,7 @@ class MultitaskTrainer(Trainer):
             if labels is not None:
                 labels = self._pad_across_processes(labels)
                 labels = self._nested_gather(labels)
+                print("labels: ", labels)
                 labels_host = labels if labels_host is None else nested_concat(labels_host, labels, padding_index=-100)
             # if inputs_decode is not None:
             #     inputs_decode = self._pad_across_processes(inputs_decode)
@@ -349,12 +370,20 @@ class MultitaskTrainer(Trainer):
             #         if inputs_host is None
             #         else nested_concat(inputs_host, inputs_decode, padding_index=-100)
             #     )
-            all_task_name += [task_name] * observed_batch_size
+            if task_name is not None:
+                task_names = torch.tensor([task_name] * observed_batch_size)
+                task_names = task_names.to("cuda")
+                task_names = self._nested_gather(task_names)
+                print(task_names)
+                task_host = task_names if task_host is None else torch.cat((task_host, task_names), dim=0)
             if logits is not None:
                 logits = self._pad_across_processes(logits)
+                print("B", logits.shape)
                 logits = self._nested_gather(logits)
+                print("C", logits.shape)
                 if self.preprocess_logits_for_metrics is not None:
                     logits = self.preprocess_logits_for_metrics(logits, labels)
+                print("D", logits.shape)
                 preds_host = logits if preds_host is None else nested_concat(preds_host, logits, padding_index=-100)
             self.control = self.callback_handler.on_prediction_step(args, self.state, self.control)
 
@@ -381,7 +410,8 @@ class MultitaskTrainer(Trainer):
                 # Set back to None to begin a new accumulation
                 losses_host, preds_host, inputs_host, labels_host = None, None, None, None
             
-            assert preds_host.shape[0] == len(all_task_name)
+            print(f"assert: {preds_host.shape}, {task_host.shape}, {inputs['input_ids'].shape}, {logits.shape}")
+            assert preds_host.shape[0] == len(task_host)
 
         if args.past_index and hasattr(self, "_past"):
             # Clean the state at the end of the evaluation loop
@@ -400,6 +430,9 @@ class MultitaskTrainer(Trainer):
         #         inputs_decode if all_inputs is None else nested_concat(all_inputs, inputs_decode, padding_index=-100)
         #     )
         # all_task_name += [task_name] * observed_batch_size
+        if task_host is not None:
+            task_names = nested_numpify(task_host)
+            all_task_name = task_names if all_task_name is None else np.concatenate((all_task_name, task_names), axis=0)
         if labels_host is not None:
             labels = nested_numpify(labels_host)
             all_labels = labels if all_labels is None else nested_concat(all_labels, labels, padding_index=-100)
@@ -426,7 +459,7 @@ class MultitaskTrainer(Trainer):
         if all_labels is not None:
             all_labels = nested_truncate(all_labels, num_samples)
         if all_task_name is not None:
-            all_task_name = nested_truncate(np.array(all_task_name), num_samples)
+            all_task_name = nested_truncate(all_task_name, num_samples)
         # if all_inputs is not None:
         #     all_inputs = nested_truncate(all_inputs, num_samples)
         #     all_inputs = (all_inputs, all_task_name)

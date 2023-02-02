@@ -38,11 +38,11 @@ class SiameseBertForSequenceClassification(BertPreTrainedModel):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # self.classifier = nn.Linear(config.hidden_size * 3, self.config.num_labels, bias=False)
         self.classifier = nn.Sequential(
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size * 3, config.hidden_size * 1),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size * 1, 64),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, self.config.num_labels),
+            nn.Linear(64, self.config.num_labels),
         )
 
         self.init_weights()
@@ -125,11 +125,11 @@ class MonoBertForSequenceClassification(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Sequential(
-            nn.Linear(config.hidden_size, config.hidden_size * 3),
+            nn.Linear(config.hidden_size, config.hidden_size * 1),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size * 1, 64),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, self.config.num_labels),
+            nn.Linear(64, self.config.num_labels),
         )
 
         self.init_weights()
