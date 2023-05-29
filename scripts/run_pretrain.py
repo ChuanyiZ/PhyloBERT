@@ -19,7 +19,6 @@ GPT and GPT-2 are fine-tuned using a causal language modeling (CLM) loss while B
 using a masked language modeling (MLM) loss.
 """
 
-
 import argparse
 import glob
 import logging
@@ -228,7 +227,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, num_proc=8):
         batched=True,
         num_proc=num_proc,
         cache_file_names={
-            "train": f"/hdd/phylobert_data/cache/cache-pretrain-{file_id}.arrow"
+            "train": f"/home/ac.chia/PhyloBERT/cache/cache-pretrain-{file_id}.arrow"
         }
     )
     dataset.set_format(
