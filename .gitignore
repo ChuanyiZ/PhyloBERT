@@ -1,3 +1,9 @@
 *.pyc
 src/__pycache__/
 models/
+*.0
+*.1
+*.png
+*.npy
+*.tsv.gz
+*.log
