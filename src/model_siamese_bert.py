@@ -38,11 +38,11 @@ class SiameseBertForSequenceClassification(BertPreTrainedModel):
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         # self.classifier = nn.Linear(config.hidden_size * 3, self.config.num_labels, bias=False)
         self.classifier = nn.Sequential(
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size * 3, config.hidden_size),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size, 64),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, self.config.num_labels),
+            nn.Linear(64, self.config.num_labels),
         )
 
         self.init_weights()
@@ -100,10 +100,14 @@ class SiameseBertForSequenceClassification(BertPreTrainedModel):
         diff = abs(pooled_output0 - pooled_output1)
         tri = cat((pooled_output0, pooled_output1, diff), dim=1)
         tri = self.dropout(cat((pooled_output0, pooled_output1, diff), dim=1))
+        ave0 = torch.mean(outputs0[0], dim=1)
+        ave1 = torch.mean(outputs1[0], dim=1)
+        ave_tri = cat((ave0, ave1, abs(ave0 - ave1)), dim=1)
         logits = self.classifier(tri)
 
         # TODO: get rid of `+ outputs0[2:]`
-        outputs = (logits,) + outputs0[2:]  # add hidden states and attention if they are here
+        # outputs = (logits,) + outputs0[2:]  # add hidden states and attention if they are here
+        outputs = (logits,) + outputs0[2:]  + outputs1[2:] + (tri, ave_tri)
 
         if labels is not None:
             if self.num_labels == 1:
@@ -125,11 +129,11 @@ class MonoBertForSequenceClassification(BertPreTrainedModel):
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.classifier = nn.Sequential(
-            nn.Linear(config.hidden_size, config.hidden_size * 3),
+            nn.Linear(config.hidden_size, config.hidden_size),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, config.hidden_size * 3),
+            nn.Linear(config.hidden_size, 64),
             nn.ReLU(),
-            nn.Linear(config.hidden_size * 3, self.config.num_labels),
+            nn.Linear(64, self.config.num_labels),
         )
 
         self.init_weights()
@@ -175,6 +179,7 @@ class MonoBertForSequenceClassification(BertPreTrainedModel):
 
         # TODO: get rid of `+ outputs1[2:]`
         outputs = (logits,) + outputs1[2:]  # add hidden states and attention if they are here
+        # outputs = (logits,)  + (pooled_output0,)
 
         if labels is not None:
             if self.num_labels == 1:
